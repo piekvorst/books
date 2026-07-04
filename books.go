@@ -8,8 +8,6 @@
 //
 // . clean structure: decouple finding from read/update/delete
 //
-// . clean structure: decouple HTTP handling
-//
 // . clean structure: decouple repo
 //
 // . observability: use slog
@@ -251,7 +249,28 @@ func (m *Mux) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Mux) Delete(w http.ResponseWriter, r *http.Request) {
-	m.s.Delete(w, r)
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "invalid ID: %v\n", err)
+		return
+	}
+
+	err = m.s.Delete(id)
+	switch {
+	case errors.Is(err, errNotFound):
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprintf(w, "not found\n")
+		return
+	case err != nil:
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, "failed to delete an entity\n")
+		m.l.Printf("Mux.Delete: unexpected error: %v\n", err)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "ok\n")
 }
 
 func (s *Service) Create(b *Book) (*Book, error) {
@@ -294,35 +313,18 @@ func (s *Service) Update(b *Book) (*Book, error) {
 	return nil, errNotFound
 }
 
-func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.Atoi(r.PathValue("id"))
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "invalid ID: %v\n", err)
-		return
-	}
-
-	var found **Book
-
+func (s *Service) Delete(id int) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	for i := range s.storage {
 		if s.storage[i] != nil && s.storage[i].ID == id {
-			found = &s.storage[i]
-			break
+			s.storage[i] = nil
+			return nil
 		}
 	}
-	if found != nil {
-		*found = nil
-	}
-	s.mu.Unlock()
 
-	if found != nil {
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, "ok\n")
-	} else {
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprintf(w, "not found\n")
-	}
+	return errNotFound
 }
 
 func sprintfInto(dst *string, format string, a ...any) {
