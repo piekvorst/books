@@ -1,6 +1,6 @@
 // problems, prioritized:
 //
-// . correctness: eliminate writing status after Write
+// . security: don't show the client why json encoding fails
 //
 // . concurrency safety: respect request's context
 //
@@ -10,7 +10,7 @@
 //
 // . clean structure: decouple finding from read/update/delete
 //
-// . clean structure: net/http, storage, and mu: remove the global state
+// . clean structure: net/http, storage, mu, and log: remove the global state
 //
 // . clean structure: decouple HTTP handling
 //
@@ -22,6 +22,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -127,10 +128,15 @@ func create(w http.ResponseWriter, r *http.Request) {
 	storage = append(storage, &b)
 	mu.Unlock()
 
-	if err := json.NewEncoder(w).Encode(b); err != nil {
+	var resp bytes.Buffer
+	if err := json.NewEncoder(&resp).Encode(b); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "failed to encode: %v\n", err)
 		return
+	}
+
+	if written, err := resp.WriteTo(w); err != nil {
+		log.Printf("failed to write to write to client (written %v bytes): %v\n", written, err)
 	}
 }
 
@@ -154,9 +160,15 @@ func read(w http.ResponseWriter, r *http.Request) {
 	mu.RUnlock()
 
 	if found != nil {
-		if err := json.NewEncoder(w).Encode(found); err != nil {
+		var resp bytes.Buffer
+		if err := json.NewEncoder(&resp).Encode(found); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			fmt.Fprintf(w, "failed to encode: %v\n", err)
+			return
+		}
+
+		if written, err := resp.WriteTo(w); err != nil {
+			log.Printf("failed to write to write to client (written %v bytes): %v\n", written, err)
 		}
 	} else {
 		w.WriteHeader(http.StatusNotFound)
@@ -194,10 +206,15 @@ func update(w http.ResponseWriter, r *http.Request) {
 	mu.Unlock()
 
 	if found != nil {
-		if err := json.NewEncoder(w).Encode(b); err != nil {
+		var resp bytes.Buffer
+		if err := json.NewEncoder(&resp).Encode(b); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			fmt.Fprintf(w, "failed to encode: %v\n", err)
 			return
+		}
+
+		if written, err := resp.WriteTo(w); err != nil {
+			log.Printf("failed to write to write to client (written %v bytes): %v\n", written, err)
 		}
 	} else {
 		w.WriteHeader(http.StatusNotFound)
