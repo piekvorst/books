@@ -40,9 +40,10 @@ type Book struct {
 	Author string `json:"author"`
 }
 
-type HttpHandler struct {
-	l net.Listener
-	s *http.Server
+type Mux struct {
+	*http.ServeMux
+
+	s *Service
 }
 
 type Service struct {
@@ -112,25 +113,17 @@ func (b *Book) UserInputValidForUpdate(safeError *string) bool {
 	return true
 }
 
-func (hh *HttpHandler) Serve() error {
-	return hh.s.Serve(hh.l)
-}
+func NewMux(s *Service) *Mux {
+	m := &Mux{}
+	m.s = s
 
-func NewHttpHandler(l net.Listener, service *Service) *HttpHandler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /books", service.Create)
-	mux.HandleFunc("GET /books/{id}", service.Read)
-	mux.HandleFunc("PUT /books", service.Update)
-	mux.HandleFunc("DELETE /books/{id}", service.Delete)
+	m.ServeMux = http.NewServeMux()
+	m.ServeMux.HandleFunc("POST /books", m.Create)
+	m.ServeMux.HandleFunc("GET /books/{id}", m.Read)
+	m.ServeMux.HandleFunc("PUT /books", m.Update)
+	m.ServeMux.HandleFunc("DELETE /books/{id}", m.Delete)
 
-	hh := &HttpHandler{}
-	hh.l = l
-
-	hh.s = &http.Server{
-		Handler: mux,
-	}
-
-	return hh
+	return m
 }
 
 func NewService(l *log.Logger) *Service {
@@ -138,6 +131,22 @@ func NewService(l *log.Logger) *Service {
 	s.l = l
 
 	return s
+}
+
+func (m *Mux) Create(w http.ResponseWriter, r *http.Request) {
+	m.s.Create(w, r)
+}
+
+func (m *Mux) Read(w http.ResponseWriter, r *http.Request) {
+	m.s.Read(w, r)
+}
+
+func (m *Mux) Update(w http.ResponseWriter, r *http.Request) {
+	m.s.Update(w, r)
+}
+
+func (m *Mux) Delete(w http.ResponseWriter, r *http.Request) {
+	m.s.Delete(w, r)
 }
 
 func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
@@ -300,14 +309,17 @@ func run() error {
 
 	service := NewService(logger)
 
+	mux := NewMux(service)
+
 	listener, err := net.Listen("tcp", ":8090")
 	if err != nil {
 		return fmt.Errorf("run: failed to acquire a listener: %w", err)
 	}
 
-	hh := NewHttpHandler(listener, service)
-
-	if err := hh.Serve(); err != nil {
+	server := &http.Server{
+		Handler: mux,
+	}
+	if err := server.Serve(listener); err != nil {
 		return fmt.Errorf("run: http handler failed: %w", err)
 	}
 
