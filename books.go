@@ -17,6 +17,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -151,39 +152,27 @@ func (m *Mux) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type createResult struct {
-		b   *Book
-		err error
-	}
-	ch := make(chan createResult, 1)
-
-	go func() {
-		b, err := m.s.Create(&b)
-		ch <- createResult{b, err}
-	}()
-
-	select {
-	case <-r.Context().Done():
+	newbook, err := withContext(r.Context(), func() (*Book, error) { return m.s.Create(&b) })
+	switch {
+	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 		return
-	case result := <-ch:
-		if result.err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprintf(w, "failed to create an entity\n")
-			m.l.Printf("Mux.Create: unexpected error: %v\n", result.err)
-			return
-		}
+	case err != nil:
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, "failed to create an entity\n")
+		m.l.Printf("Mux.Create: unexpected error: %v\n", err)
+		return
+	}
 
-		var resp bytes.Buffer
-		if err := json.NewEncoder(&resp).Encode(result.b); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprintf(w, "failed to encode response\n")
-			m.l.Printf("Mux.Create: failed to encode response: %v\n", err)
-			return
-		}
+	var resp bytes.Buffer
+	if err := json.NewEncoder(&resp).Encode(newbook); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, "failed to encode response\n")
+		m.l.Printf("Mux.Create: failed to encode response: %v\n", err)
+		return
+	}
 
-		if written, err := resp.WriteTo(w); err != nil {
-			m.l.Printf("Mux.Create: failed to write to write to client (written %v bytes): %v\n", written, err)
-		}
+	if written, err := resp.WriteTo(w); err != nil {
+		m.l.Printf("Mux.Create: failed to write to write to client (written %v bytes): %v\n", written, err)
 	}
 }
 
@@ -195,44 +184,32 @@ func (m *Mux) Read(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type readResult struct {
-		b   *Book
-		err error
-	}
-	ch := make(chan readResult, 1)
-
-	go func() {
-		b, err := m.s.Read(id)
-		ch <- readResult{b, err}
-	}()
-
-	select {
-	case <-r.Context().Done():
+	b, err := withContext(r.Context(), func() (*Book, error) { return m.s.Read(id) })
+	switch {
+	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 		return
-	case result := <-ch:
-		if result.err != nil {
+	case err != nil:
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, "failed to found an entity\n")
+		m.l.Printf("Mux.Read: unexpected error: %v\n", err)
+		return
+	}
+
+	if b != nil {
+		var resp bytes.Buffer
+		if err := json.NewEncoder(&resp).Encode(b); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprintf(w, "failed to found an entity\n")
-			m.l.Printf("Mux.Read: unexpected error: %v\n", result.err)
+			fmt.Fprintf(w, "failed to encode response\n")
+			m.l.Printf("Mux.Read: failed to encode response: %v\n", err)
 			return
 		}
 
-		if result.b != nil {
-			var resp bytes.Buffer
-			if err := json.NewEncoder(&resp).Encode(result.b); err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-				fmt.Fprintf(w, "failed to encode response\n")
-				m.l.Printf("Mux.Read: failed to encode response: %v\n", err)
-				return
-			}
-
-			if written, err := resp.WriteTo(w); err != nil {
-				m.l.Printf("Mux.Read: failed to write to write to client (written %v bytes): %v\n", written, err)
-			}
-		} else {
-			w.WriteHeader(http.StatusNotFound)
-			fmt.Fprintf(w, "not found\n")
+		if written, err := resp.WriteTo(w); err != nil {
+			m.l.Printf("Mux.Read: failed to write to write to client (written %v bytes): %v\n", written, err)
 		}
+	} else {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprintf(w, "not found\n")
 	}
 }
 
@@ -354,6 +331,26 @@ func (s *Service) Delete(id int) error {
 	}
 
 	return errNotFound
+}
+
+func withContext[T any](ctx context.Context, fn func() (T, error)) (T, error) {
+	type result struct {
+		t   T
+		err error
+	}
+	ch := make(chan result, 1)
+
+	go func() {
+		t, err := fn()
+		ch <- result{t, err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return *new(T), ctx.Err()
+	case r := <-ch:
+		return r.t, r.err
+	}
 }
 
 func sprintfInto(dst *string, format string, a ...any) {
