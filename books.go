@@ -8,7 +8,7 @@
 //
 // . clean structure: decouple finding from read/update/delete
 //
-// . clean structure: net/http, storage, mu, and log: remove the global state
+// . clean structure: storage, mu, and log: remove the global state
 //
 // . clean structure: decouple HTTP handling
 //
@@ -24,7 +24,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
 )
@@ -38,6 +40,11 @@ type Book struct {
 	ID     int    `json:"id"`
 	Title  string `json:"title"`
 	Author string `json:"author"`
+}
+
+type HttpHandler struct {
+	l net.Listener
+	s *http.Server
 }
 
 var storage []*Book
@@ -103,6 +110,27 @@ func (b *Book) UserInputValidForUpdate(safeError *string) bool {
 	}
 
 	return true
+}
+
+func (hh *HttpHandler) Serve() error {
+	return hh.s.Serve(hh.l)
+}
+
+func NewHttpHandler(l net.Listener) *HttpHandler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /books", create)
+	mux.HandleFunc("GET /books/{id}", read)
+	mux.HandleFunc("PUT /books", update)
+	mux.HandleFunc("DELETE /books/{id}", delete)
+
+	hh := &HttpHandler{}
+	hh.l = l
+
+	hh.s = &http.Server{
+		Handler: mux,
+	}
+
+	return hh
 }
 
 func create(w http.ResponseWriter, r *http.Request) {
@@ -260,14 +288,26 @@ func sprintfInto(dst *string, format string, a ...any) {
 	}
 }
 
-func main() {
+func run() error {
 	log.SetPrefix("books: ")
 	log.SetFlags(0)
 
-	http.HandleFunc("POST /books", create)
-	http.HandleFunc("GET /books/{id}", read)
-	http.HandleFunc("PUT /books", update)
-	http.HandleFunc("DELETE /books/{id}", delete)
+	l, err := net.Listen("tcp", ":8090")
+	if err != nil {
+		return fmt.Errorf("run: failed to acquire a listener: %w", err)
+	}
 
-	log.Fatalln(http.ListenAndServe(":8090", nil))
+	hh := NewHttpHandler(l)
+
+	if err := hh.Serve(); err != nil {
+		return fmt.Errorf("run: http handler failed: %w", err)
+	}
+
+	return nil
+}
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "main: run failed: %v\n", err)
+	}
 }
