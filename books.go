@@ -1,7 +1,5 @@
 // problems, prioritized:
 //
-// . correctness: protect concurrent access
-//
 // . correctness: validate input
 //
 // . correctness: eliminate writing status after Write
@@ -14,7 +12,7 @@
 //
 // . clean structure: decouple finding from read/update/delete
 //
-// . clean structure: net/http and storage: remove the global state
+// . clean structure: net/http, storage, and mu: remove the global state
 //
 // . clean structure: decouple HTTP handling
 //
@@ -31,6 +29,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"sync"
 )
 
 type Book struct {
@@ -40,6 +39,8 @@ type Book struct {
 }
 
 var storage []*Book
+
+var mu sync.RWMutex
 
 func create(w http.ResponseWriter, r *http.Request) {
 	var b Book
@@ -54,6 +55,9 @@ func create(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "ID cannot be set\n")
 		return
 	}
+
+	mu.Lock()
+	defer mu.Unlock()
 
 	id := len(storage) + 1
 	b.ID = id
@@ -73,6 +77,9 @@ func read(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "invalid ID: %v\n", err)
 		return
 	}
+
+	mu.RLock()
+	defer mu.RUnlock()
 
 	for _, b := range storage {
 		if b != nil && b.ID == id {
@@ -97,6 +104,9 @@ func update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mu.Lock()
+	defer mu.Unlock()
+
 	for i := range storage {
 		if storage[i] != nil && storage[i].ID == b.ID {
 			storage[i] = &b
@@ -120,6 +130,9 @@ func delete(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "invalid ID: %v\n", err)
 		return
 	}
+
+	mu.Lock()
+	defer mu.Unlock()
 
 	for i := range storage {
 		if storage[i] != nil && storage[i].ID == id {
