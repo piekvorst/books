@@ -171,7 +171,37 @@ func (m *Mux) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Mux) Read(w http.ResponseWriter, r *http.Request) {
-	m.s.Read(w, r)
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "invalid ID: %v\n", err)
+		return
+	}
+
+	found, err := m.s.Read(id)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, "failed to found an entity\n")
+		m.l.Printf("Mux.Read: unexpected error: %v\n", err)
+		return
+	}
+
+	if found != nil {
+		var resp bytes.Buffer
+		if err := json.NewEncoder(&resp).Encode(found); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintf(w, "failed to encode response\n")
+			m.l.Printf("Mux.Read: failed to encode response: %v\n", err)
+			return
+		}
+
+		if written, err := resp.WriteTo(w); err != nil {
+			m.l.Printf("Mux.Read: failed to write to write to client (written %v bytes): %v\n", written, err)
+		}
+	} else {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprintf(w, "not found\n")
+	}
 }
 
 func (m *Mux) Update(w http.ResponseWriter, r *http.Request) {
@@ -195,41 +225,17 @@ func (s *Service) Create(b *Book) (*Book, error) {
 	return newbook, nil
 }
 
-func (s *Service) Read(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.Atoi(r.PathValue("id"))
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "invalid ID: %v\n", err)
-		return
-	}
-
-	var found *Book
-
+func (s *Service) Read(id int) (*Book, error) {
 	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	for _, b := range s.storage {
 		if b != nil && b.ID == id {
-			found = b
-			break
+			return b, nil
 		}
 	}
-	s.mu.RUnlock()
 
-	if found != nil {
-		var resp bytes.Buffer
-		if err := json.NewEncoder(&resp).Encode(found); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprintf(w, "failed to encode response\n")
-			s.l.Printf("failed to encode response: %v\n", err)
-			return
-		}
-
-		if written, err := resp.WriteTo(w); err != nil {
-			s.l.Printf("failed to write to write to client (written %v bytes): %v\n", written, err)
-		}
-	} else {
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprintf(w, "not found\n")
-	}
+	return nil, nil
 }
 
 func (s *Service) Update(w http.ResponseWriter, r *http.Request) {
