@@ -1,7 +1,5 @@
 // problems, prioritized:
 //
-// . security: don't show the client why json encoding fails
-//
 // . concurrency safety: respect request's context
 //
 // . concurrency safety: graceful shutdown
@@ -131,7 +129,8 @@ func create(w http.ResponseWriter, r *http.Request) {
 	var resp bytes.Buffer
 	if err := json.NewEncoder(&resp).Encode(b); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprintf(w, "failed to encode: %v\n", err)
+		fmt.Fprintf(w, "failed to encode response\n")
+		log.Printf("failed to encode response: %v\n", err)
 		return
 	}
 
@@ -163,7 +162,8 @@ func read(w http.ResponseWriter, r *http.Request) {
 		var resp bytes.Buffer
 		if err := json.NewEncoder(&resp).Encode(found); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprintf(w, "failed to encode: %v\n", err)
+			fmt.Fprintf(w, "failed to encode response\n")
+			log.Printf("failed to encode response: %v\n", err)
 			return
 		}
 
@@ -209,7 +209,8 @@ func update(w http.ResponseWriter, r *http.Request) {
 		var resp bytes.Buffer
 		if err := json.NewEncoder(&resp).Encode(b); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprintf(w, "failed to encode: %v\n", err)
+			fmt.Fprintf(w, "failed to encode response\n")
+			log.Printf("failed to encode response: %v\n", err)
 			return
 		}
 
