@@ -8,8 +8,6 @@
 //
 // . clean structure: decouple finding from read/update/delete
 //
-// . clean structure: storage, mu, and log: remove the global state
-//
 // . clean structure: decouple HTTP handling
 //
 // . clean structure: decouple repo
@@ -47,9 +45,11 @@ type HttpHandler struct {
 	s *http.Server
 }
 
-var storage []*Book
-
-var mu sync.RWMutex
+type Service struct {
+	storage []*Book
+	mu      sync.RWMutex
+	l       *log.Logger
+}
 
 // UserInputValid validates b, assuming that the whole data is
 // filled by the user.
@@ -116,12 +116,12 @@ func (hh *HttpHandler) Serve() error {
 	return hh.s.Serve(hh.l)
 }
 
-func NewHttpHandler(l net.Listener) *HttpHandler {
+func NewHttpHandler(l net.Listener, service *Service) *HttpHandler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /books", create)
-	mux.HandleFunc("GET /books/{id}", read)
-	mux.HandleFunc("PUT /books", update)
-	mux.HandleFunc("DELETE /books/{id}", delete)
+	mux.HandleFunc("POST /books", service.Create)
+	mux.HandleFunc("GET /books/{id}", service.Read)
+	mux.HandleFunc("PUT /books", service.Update)
+	mux.HandleFunc("DELETE /books/{id}", service.Delete)
 
 	hh := &HttpHandler{}
 	hh.l = l
@@ -133,7 +133,14 @@ func NewHttpHandler(l net.Listener) *HttpHandler {
 	return hh
 }
 
-func create(w http.ResponseWriter, r *http.Request) {
+func NewService(l *log.Logger) *Service {
+	s := &Service{}
+	s.l = l
+
+	return s
+}
+
+func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 	var b Book
 	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -148,26 +155,26 @@ func create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mu.Lock()
-	id := len(storage) + 1
+	s.mu.Lock()
+	id := len(s.storage) + 1
 	b.ID = id
-	storage = append(storage, &b)
-	mu.Unlock()
+	s.storage = append(s.storage, &b)
+	s.mu.Unlock()
 
 	var resp bytes.Buffer
 	if err := json.NewEncoder(&resp).Encode(b); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "failed to encode response\n")
-		log.Printf("failed to encode response: %v\n", err)
+		s.l.Printf("failed to encode response: %v\n", err)
 		return
 	}
 
 	if written, err := resp.WriteTo(w); err != nil {
-		log.Printf("failed to write to write to client (written %v bytes): %v\n", written, err)
+		s.l.Printf("failed to write to write to client (written %v bytes): %v\n", written, err)
 	}
 }
 
-func read(w http.ResponseWriter, r *http.Request) {
+func (s *Service) Read(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -177,26 +184,26 @@ func read(w http.ResponseWriter, r *http.Request) {
 
 	var found *Book
 
-	mu.RLock()
-	for _, b := range storage {
+	s.mu.RLock()
+	for _, b := range s.storage {
 		if b != nil && b.ID == id {
 			found = b
 			break
 		}
 	}
-	mu.RUnlock()
+	s.mu.RUnlock()
 
 	if found != nil {
 		var resp bytes.Buffer
 		if err := json.NewEncoder(&resp).Encode(found); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			fmt.Fprintf(w, "failed to encode response\n")
-			log.Printf("failed to encode response: %v\n", err)
+			s.l.Printf("failed to encode response: %v\n", err)
 			return
 		}
 
 		if written, err := resp.WriteTo(w); err != nil {
-			log.Printf("failed to write to write to client (written %v bytes): %v\n", written, err)
+			s.l.Printf("failed to write to write to client (written %v bytes): %v\n", written, err)
 		}
 	} else {
 		w.WriteHeader(http.StatusNotFound)
@@ -204,7 +211,7 @@ func read(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func update(w http.ResponseWriter, r *http.Request) {
+func (s *Service) Update(w http.ResponseWriter, r *http.Request) {
 	var b Book
 	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -221,29 +228,29 @@ func update(w http.ResponseWriter, r *http.Request) {
 
 	var found *Book
 
-	mu.Lock()
-	for i := range storage {
-		if storage[i] != nil && storage[i].ID == b.ID {
-			found = storage[i]
+	s.mu.Lock()
+	for i := range s.storage {
+		if s.storage[i] != nil && s.storage[i].ID == b.ID {
+			found = s.storage[i]
 			break
 		}
 	}
 	if found != nil {
 		*found = b
 	}
-	mu.Unlock()
+	s.mu.Unlock()
 
 	if found != nil {
 		var resp bytes.Buffer
 		if err := json.NewEncoder(&resp).Encode(b); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			fmt.Fprintf(w, "failed to encode response\n")
-			log.Printf("failed to encode response: %v\n", err)
+			s.l.Printf("failed to encode response: %v\n", err)
 			return
 		}
 
 		if written, err := resp.WriteTo(w); err != nil {
-			log.Printf("failed to write to write to client (written %v bytes): %v\n", written, err)
+			s.l.Printf("failed to write to write to client (written %v bytes): %v\n", written, err)
 		}
 	} else {
 		w.WriteHeader(http.StatusNotFound)
@@ -251,7 +258,7 @@ func update(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func delete(w http.ResponseWriter, r *http.Request) {
+func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -261,17 +268,17 @@ func delete(w http.ResponseWriter, r *http.Request) {
 
 	var found **Book
 
-	mu.Lock()
-	for i := range storage {
-		if storage[i] != nil && storage[i].ID == id {
-			found = &storage[i]
+	s.mu.Lock()
+	for i := range s.storage {
+		if s.storage[i] != nil && s.storage[i].ID == id {
+			found = &s.storage[i]
 			break
 		}
 	}
 	if found != nil {
 		*found = nil
 	}
-	mu.Unlock()
+	s.mu.Unlock()
 
 	if found != nil {
 		w.WriteHeader(http.StatusOK)
@@ -289,15 +296,16 @@ func sprintfInto(dst *string, format string, a ...any) {
 }
 
 func run() error {
-	log.SetPrefix("books: ")
-	log.SetFlags(0)
+	logger := log.New(os.Stderr, "books: ", 0)
 
-	l, err := net.Listen("tcp", ":8090")
+	service := NewService(logger)
+
+	listener, err := net.Listen("tcp", ":8090")
 	if err != nil {
 		return fmt.Errorf("run: failed to acquire a listener: %w", err)
 	}
 
-	hh := NewHttpHandler(l)
+	hh := NewHttpHandler(listener, service)
 
 	if err := hh.Serve(); err != nil {
 		return fmt.Errorf("run: http handler failed: %w", err)
