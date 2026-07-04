@@ -1,7 +1,5 @@
 // problems, prioritized:
 //
-// . concurrency safety: respect request's context
-//
 // . concurrency safety: graceful shutdown
 //
 // . modeling: deleted_at instead of nil
@@ -228,8 +226,10 @@ func (m *Mux) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	found, err := m.s.Update(&b)
+	found, err := withContext(r.Context(), func() (*Book, error) { return m.s.Update(&b) })
 	switch {
+	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
+		return
 	case errors.Is(err, errNotFound):
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprintf(w, "not found\n")
@@ -262,8 +262,10 @@ func (m *Mux) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = m.s.Delete(id)
+	_, err = withContext(r.Context(), func() (struct{}, error) { return struct{}{}, m.s.Delete(id) })
 	switch {
+	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
+		return
 	case errors.Is(err, errNotFound):
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprintf(w, "not found\n")
