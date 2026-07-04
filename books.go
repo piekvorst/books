@@ -49,7 +49,6 @@ type Mux struct {
 type Service struct {
 	storage []*Book
 	mu      sync.RWMutex
-	l       *log.Logger
 }
 
 var (
@@ -117,8 +116,9 @@ func (b *Book) UserInputValidForUpdate(safeError *string) bool {
 	return true
 }
 
-func NewMux(s *Service) *Mux {
+func NewMux(l *log.Logger, s *Service) *Mux {
 	m := &Mux{}
+	m.l = l
 	m.s = s
 
 	m.ServeMux = http.NewServeMux()
@@ -130,9 +130,8 @@ func NewMux(s *Service) *Mux {
 	return m
 }
 
-func NewService(l *log.Logger) *Service {
+func NewService() *Service {
 	s := &Service{}
-	s.l = l
 
 	return s
 }
@@ -336,9 +335,9 @@ func sprintfInto(dst *string, format string, a ...any) {
 func run() error {
 	logger := log.New(os.Stderr, "books: ", 0)
 
-	service := NewService(logger)
+	service := NewService()
 
-	mux := NewMux(service)
+	mux := NewMux(logger, service)
 
 	listener, err := net.Listen("tcp", ":8090")
 	if err != nil {
