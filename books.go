@@ -57,11 +57,10 @@ func create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mu.Lock()
-	defer mu.Unlock()
-
 	id := len(storage) + 1
 	b.ID = id
 	storage = append(storage, &b)
+	mu.Unlock()
 
 	if err := json.NewEncoder(w).Encode(b); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -78,22 +77,26 @@ func read(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mu.RLock()
-	defer mu.RUnlock()
+	var found *Book
 
+	mu.RLock()
 	for _, b := range storage {
 		if b != nil && b.ID == id {
-			if err := json.NewEncoder(w).Encode(b); err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-				fmt.Fprintf(w, "failed to encode: %v\n", err)
-				return
-			}
-			return
+			found = b
+			break
 		}
 	}
+	mu.RUnlock()
 
-	w.WriteHeader(http.StatusNotFound)
-	fmt.Fprintf(w, "not found\n")
+	if found != nil {
+		if err := json.NewEncoder(w).Encode(found); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintf(w, "failed to encode: %v\n", err)
+		}
+	} else {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprintf(w, "not found\n")
+	}
 }
 
 func update(w http.ResponseWriter, r *http.Request) {
@@ -104,23 +107,30 @@ func update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
+	var found *Book
 
+	mu.Lock()
 	for i := range storage {
 		if storage[i] != nil && storage[i].ID == b.ID {
-			storage[i] = &b
-			if err := json.NewEncoder(w).Encode(b); err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-				fmt.Fprintf(w, "failed to encode: %v\n", err)
-				return
-			}
-			return
+			found = storage[i]
+			break
 		}
 	}
+	if found != nil {
+		*found = b
+	}
+	mu.Unlock()
 
-	w.WriteHeader(http.StatusNotFound)
-	fmt.Fprintf(w, "not found\n")
+	if found != nil {
+		if err := json.NewEncoder(w).Encode(b); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintf(w, "failed to encode: %v\n", err)
+			return
+		}
+	} else {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprintf(w, "not found\n")
+	}
 }
 
 func delete(w http.ResponseWriter, r *http.Request) {
@@ -131,21 +141,27 @@ func delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
+	var found **Book
 
+	mu.Lock()
 	for i := range storage {
 		if storage[i] != nil && storage[i].ID == id {
-			storage[i] = nil
-
-			w.WriteHeader(http.StatusOK)
-			fmt.Fprintf(w, "ok\n")
-			return
+			found = &storage[i]
+			break
 		}
 	}
+	if found != nil {
+		*found = nil
+	}
+	mu.Unlock()
 
-	w.WriteHeader(http.StatusNotFound)
-	fmt.Fprintf(w, "not found\n")
+	if found != nil {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, "ok\n")
+	} else {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprintf(w, "not found\n")
+	}
 }
 
 func main() {
