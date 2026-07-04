@@ -151,24 +151,39 @@ func (m *Mux) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newbook, err := m.s.Create(&b)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprintf(w, "failed to create an entity\n")
-		m.l.Printf("Mux.Create: unexpected error: %v\n", err)
-		return
+	type createResult struct {
+		b   *Book
+		err error
 	}
+	ch := make(chan createResult, 1)
 
-	var resp bytes.Buffer
-	if err := json.NewEncoder(&resp).Encode(newbook); err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprintf(w, "failed to encode response\n")
-		m.l.Printf("Mux.Create: failed to encode response: %v\n", err)
+	go func() {
+		b, err := m.s.Create(&b)
+		ch <- createResult{b, err}
+	}()
+
+	select {
+	case <-r.Context().Done():
 		return
-	}
+	case result := <-ch:
+		if result.err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintf(w, "failed to create an entity\n")
+			m.l.Printf("Mux.Create: unexpected error: %v\n", result.err)
+			return
+		}
 
-	if written, err := resp.WriteTo(w); err != nil {
-		m.l.Printf("Mux.Create: failed to write to write to client (written %v bytes): %v\n", written, err)
+		var resp bytes.Buffer
+		if err := json.NewEncoder(&resp).Encode(result.b); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintf(w, "failed to encode response\n")
+			m.l.Printf("Mux.Create: failed to encode response: %v\n", err)
+			return
+		}
+
+		if written, err := resp.WriteTo(w); err != nil {
+			m.l.Printf("Mux.Create: failed to write to write to client (written %v bytes): %v\n", written, err)
+		}
 	}
 }
 
