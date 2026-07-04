@@ -195,29 +195,44 @@ func (m *Mux) Read(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	found, err := m.s.Read(id)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprintf(w, "failed to found an entity\n")
-		m.l.Printf("Mux.Read: unexpected error: %v\n", err)
-		return
+	type readResult struct {
+		b   *Book
+		err error
 	}
+	ch := make(chan readResult, 1)
 
-	if found != nil {
-		var resp bytes.Buffer
-		if err := json.NewEncoder(&resp).Encode(found); err != nil {
+	go func() {
+		b, err := m.s.Read(id)
+		ch <- readResult{b, err}
+	}()
+
+	select {
+	case <-r.Context().Done():
+		return
+	case result := <-ch:
+		if result.err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprintf(w, "failed to encode response\n")
-			m.l.Printf("Mux.Read: failed to encode response: %v\n", err)
+			fmt.Fprintf(w, "failed to found an entity\n")
+			m.l.Printf("Mux.Read: unexpected error: %v\n", result.err)
 			return
 		}
 
-		if written, err := resp.WriteTo(w); err != nil {
-			m.l.Printf("Mux.Read: failed to write to write to client (written %v bytes): %v\n", written, err)
+		if result.b != nil {
+			var resp bytes.Buffer
+			if err := json.NewEncoder(&resp).Encode(result.b); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprintf(w, "failed to encode response\n")
+				m.l.Printf("Mux.Read: failed to encode response: %v\n", err)
+				return
+			}
+
+			if written, err := resp.WriteTo(w); err != nil {
+				m.l.Printf("Mux.Read: failed to write to write to client (written %v bytes): %v\n", written, err)
+			}
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprintf(w, "not found\n")
 		}
-	} else {
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprintf(w, "not found\n")
 	}
 }
 
