@@ -43,6 +43,7 @@ type Book struct {
 type Mux struct {
 	*http.ServeMux
 
+	l *log.Logger
 	s *Service
 }
 
@@ -134,22 +135,6 @@ func NewService(l *log.Logger) *Service {
 }
 
 func (m *Mux) Create(w http.ResponseWriter, r *http.Request) {
-	m.s.Create(w, r)
-}
-
-func (m *Mux) Read(w http.ResponseWriter, r *http.Request) {
-	m.s.Read(w, r)
-}
-
-func (m *Mux) Update(w http.ResponseWriter, r *http.Request) {
-	m.s.Update(w, r)
-}
-
-func (m *Mux) Delete(w http.ResponseWriter, r *http.Request) {
-	m.s.Delete(w, r)
-}
-
-func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 	var b Book
 	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -164,23 +149,50 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.Lock()
-	id := len(s.storage) + 1
-	b.ID = id
-	s.storage = append(s.storage, &b)
-	s.mu.Unlock()
+	newbook, err := m.s.Create(&b)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, "failed to create an entity\n")
+		m.l.Printf("Mux.Create: unexpected error: %v\n", err)
+		return
+	}
 
 	var resp bytes.Buffer
-	if err := json.NewEncoder(&resp).Encode(b); err != nil {
+	if err := json.NewEncoder(&resp).Encode(newbook); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "failed to encode response\n")
-		s.l.Printf("failed to encode response: %v\n", err)
+		m.l.Printf("Mux.Create: failed to encode response: %v\n", err)
 		return
 	}
 
 	if written, err := resp.WriteTo(w); err != nil {
-		s.l.Printf("failed to write to write to client (written %v bytes): %v\n", written, err)
+		m.l.Printf("Mux.Create: failed to write to write to client (written %v bytes): %v\n", written, err)
 	}
+}
+
+func (m *Mux) Read(w http.ResponseWriter, r *http.Request) {
+	m.s.Read(w, r)
+}
+
+func (m *Mux) Update(w http.ResponseWriter, r *http.Request) {
+	m.s.Update(w, r)
+}
+
+func (m *Mux) Delete(w http.ResponseWriter, r *http.Request) {
+	m.s.Delete(w, r)
+}
+
+func (s *Service) Create(b *Book) (*Book, error) {
+	newbook := new(*b)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	id := len(s.storage) + 1
+	newbook.ID = id
+	s.storage = append(s.storage, newbook)
+
+	return newbook, nil
 }
 
 func (s *Service) Read(w http.ResponseWriter, r *http.Request) {
