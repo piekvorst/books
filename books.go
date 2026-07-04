@@ -20,6 +20,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -52,6 +53,10 @@ type Service struct {
 	mu      sync.RWMutex
 	l       *log.Logger
 }
+
+var (
+	errNotFound = fmt.Errorf("not found")
+)
 
 // UserInputValid validates b, assuming that the whole data is
 // filled by the user.
@@ -205,7 +210,44 @@ func (m *Mux) Read(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Mux) Update(w http.ResponseWriter, r *http.Request) {
-	m.s.Update(w, r)
+	var b Book
+	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "cannot parse book\n")
+		return
+	}
+
+	var validationError string
+	if !b.UserInputValidForUpdate(&validationError) {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "input is invalid: %v\n", validationError)
+		return
+	}
+
+	found, err := m.s.Update(&b)
+	switch {
+	case errors.Is(err, errNotFound):
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprintf(w, "not found\n")
+		return
+	case err != nil:
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, "failed to update an entity\n")
+		m.l.Printf("Mux.Update: unexpected error: %v\n", err)
+		return
+	}
+
+	var resp bytes.Buffer
+	if err := json.NewEncoder(&resp).Encode(found); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, "failed to encode response\n")
+		m.l.Printf("Mux.Update: failed to encode response: %v\n", err)
+		return
+	}
+
+	if written, err := resp.WriteTo(w); err != nil {
+		m.l.Printf("Mux.Update: failed to write to write to client (written %v bytes): %v\n", written, err)
+	}
 }
 
 func (m *Mux) Delete(w http.ResponseWriter, r *http.Request) {
@@ -238,51 +280,18 @@ func (s *Service) Read(id int) (*Book, error) {
 	return nil, nil
 }
 
-func (s *Service) Update(w http.ResponseWriter, r *http.Request) {
-	var b Book
-	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "cannot parse book\n")
-		return
-	}
-
-	var validationError string
-	if !b.UserInputValidForUpdate(&validationError) {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "input is invalid: %v\n", validationError)
-		return
-	}
-
-	var found *Book
-
+func (s *Service) Update(b *Book) (*Book, error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	for i := range s.storage {
 		if s.storage[i] != nil && s.storage[i].ID == b.ID {
-			found = s.storage[i]
-			break
+			s.storage[i] = b
+			return s.storage[i], nil
 		}
 	}
-	if found != nil {
-		*found = b
-	}
-	s.mu.Unlock()
 
-	if found != nil {
-		var resp bytes.Buffer
-		if err := json.NewEncoder(&resp).Encode(b); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprintf(w, "failed to encode response\n")
-			s.l.Printf("failed to encode response: %v\n", err)
-			return
-		}
-
-		if written, err := resp.WriteTo(w); err != nil {
-			s.l.Printf("failed to write to write to client (written %v bytes): %v\n", written, err)
-		}
-	} else {
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprintf(w, "not found\n")
-	}
+	return nil, errNotFound
 }
 
 func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
