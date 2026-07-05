@@ -43,6 +43,12 @@ type Book struct {
 	Author string `json:"author"`
 }
 
+// ValidationError imposes a guarantee on the callee: the error
+// message must be safe to show to the client.
+type ValidationError struct {
+	SafeMessage string
+}
+
 type Mux struct {
 	*http.ServeMux
 
@@ -55,65 +61,60 @@ type Service struct {
 	mu      sync.RWMutex
 }
 
-// UserInputValid validates b, assuming that the whole data is
-// filled by the user.
-//
-// If safeError is non-nil, an error message is written there,
-// guaranteeing the content to be safe to show the client.
-func (b *Book) UserInputValid(safeError *string) bool {
+func (err *ValidationError) Error() string { return err.SafeMessage }
+
+// UserInputValid always returns a ValidationError
+func (b *Book) UserInputValid() error {
 	if b.Title == "" {
-		sprintfInto(safeError, "title is empty")
-		return false
+		return &ValidationError{"title is empty"}
 	}
 	if len(b.Title) > maxLenTitle {
-		sprintfInto(safeError, "title is too long")
-		return false
+		return &ValidationError{"title is too long"}
 	}
 
 	if b.Author == "" {
-		sprintfInto(safeError, "author is empty")
-		return false
+		return &ValidationError{"author is empty"}
 	}
 	if len(b.Author) > maxLenAuthor {
-		sprintfInto(safeError, "author is too long")
-		return false
+		return &ValidationError{"author is too long"}
 	}
 
-	return true
+	return nil
 }
 
 // UserInputValidForCreate validates b, applying additional rules
 // assuming the input is used to create a new record.
-func (b *Book) UserInputValidForCreate(safeError *string) bool {
-	if !b.UserInputValid(safeError) {
-		return false
+//
+// It always returns a ValidationError
+func (b *Book) UserInputValidForCreate() error {
+	if err := b.UserInputValid(); err != nil {
+		return err
 	}
 
 	if b.ID != 0 {
-		sprintfInto(safeError, "ID must not be set")
-		return false
+		return &ValidationError{"ID must not be set"}
 	}
 
-	return true
+	return nil
 }
 
 // UserInputValidForUpdate validates b, applying additional rules
 // assuming the input is used to update an existing record.
-func (b *Book) UserInputValidForUpdate(safeError *string) bool {
-	if !b.UserInputValid(safeError) {
-		return false
+//
+// It always returns a ValidationError
+func (b *Book) UserInputValidForUpdate() error {
+	if err := b.UserInputValid(); err != nil {
+		return err
 	}
 
 	if b.ID < 0 {
-		sprintfInto(safeError, "negative ID is not allowed: %v", b.ID)
-		return false
+		return &ValidationError{fmt.Sprintf("negative ID is not allowed: %v", b.ID)}
 	}
 	if b.ID == 0 {
-		sprintfInto(safeError, "ID must be set")
-		return false
+		return &ValidationError{"ID must be set"}
 	}
 
-	return true
+	return nil
 }
 
 func NewMux(l *log.Logger, s *Service) *Mux {
@@ -144,10 +145,9 @@ func (m *Mux) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var validationError string
-	if !b.UserInputValidForCreate(&validationError) {
+	if err := b.UserInputValidForCreate(); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "input is invalid: %v\n", validationError)
+		fmt.Fprintf(w, "input is invalid: %v\n", err)
 		return
 	}
 
@@ -220,10 +220,9 @@ func (m *Mux) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var validationError string
-	if !b.UserInputValidForUpdate(&validationError) {
+	if err := b.UserInputValidForUpdate(); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "input is invalid: %v\n", validationError)
+		fmt.Fprintf(w, "input is invalid: %v\n", err)
 		return
 	}
 
@@ -353,12 +352,6 @@ func withContext[T any](ctx context.Context, fn func() (T, error)) (T, error) {
 		return *new(T), ctx.Err()
 	case r := <-ch:
 		return r.t, r.err
-	}
-}
-
-func sprintfInto(dst *string, format string, a ...any) {
-	if dst != nil {
-		*dst = fmt.Sprintf(format, a...)
 	}
 }
 
