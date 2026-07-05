@@ -1,6 +1,3 @@
-// problems, prioritized:
-//
-// . performance: make searching O(log n) time
 package main
 
 import (
@@ -15,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"sync"
 	"syscall"
@@ -410,13 +408,18 @@ func (s *Storage) Delete(id int) error {
 }
 
 func (s *Storage) byID(id int) *Book {
-	for b := range s.NonDeleted() {
-		if b.ID == id {
-			return b
-		}
-	}
+	found := sort.Search(
+		len(s.mem),
+		func(i int) bool {
+			return s.mem[i].ID >= id
+		},
+	)
 
-	return nil
+	if found < len(s.mem) && s.mem[found].ID == id && s.mem[found].DeletedAt == nil {
+		return s.mem[found]
+	} else {
+		return nil
+	}
 }
 
 func withContext[T any](ctx context.Context, fn func() (T, error)) (T, error) {
