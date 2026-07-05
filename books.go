@@ -1,7 +1,5 @@
 // problems, prioritized:
 //
-// . concurrency safety: graceful shutdown
-//
 // . modeling: deleted_at instead of nil
 //
 // . clean structure: decouple finding from read/update/delete
@@ -23,8 +21,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"sync"
+	"syscall"
+	"time"
 )
 
 const (
@@ -376,11 +377,30 @@ func run() error {
 	server := &http.Server{
 		Handler: mux,
 	}
-	if err := server.Serve(listener); err != nil {
+
+	shutdownerr := make(chan error, 1)
+
+	sigctx, sigstop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer sigstop()
+
+	go func() {
+		<-sigctx.Done()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		if err := server.Shutdown(ctx); err != nil {
+			shutdownerr <- fmt.Errorf("run: failed to shutdown server: %w\n", err)
+		} else {
+			shutdownerr <- nil
+		}
+	}()
+
+	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("run: http handler failed: %w", err)
 	}
 
-	return nil
+	return <-shutdownerr
 }
 
 func main() {
