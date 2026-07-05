@@ -33,6 +33,10 @@ const (
 	maxLenAuthor = 255
 )
 
+var (
+	errNotFound = fmt.Errorf("not found")
+)
+
 type Book struct {
 	ID     int    `json:"id"`
 	Title  string `json:"title"`
@@ -50,10 +54,6 @@ type Service struct {
 	storage []*Book
 	mu      sync.RWMutex
 }
-
-var (
-	errNotFound = fmt.Errorf("not found")
-)
 
 // UserInputValid validates b, assuming that the whole data is
 // filled by the user.
