@@ -186,7 +186,8 @@ func (m *Mux) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	case err != nil:
 		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprintf(w, "cannot parse book\n")
+		fmt.Fprintf(w, "failed to validate book\n")
+		m.logger.Error("failed to validate book", "error", err)
 		return
 	}
 
@@ -267,7 +268,8 @@ func (m *Mux) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	case err != nil:
 		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprintf(w, "cannot parse book\n")
+		fmt.Fprintf(w, "failed to validate book\n")
+		m.logger.Error("failed to validate book", "error", err)
 		return
 	}
 
