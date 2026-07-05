@@ -43,6 +43,17 @@ type Book struct {
 	Author string `json:"author"`
 }
 
+type CreateRequest struct {
+	Title  string `json:"title"`
+	Author string `json:"author"`
+}
+
+type UpdateRequest struct {
+	ID     int    `json:"id"`
+	Title  string `json:"title"`
+	Author string `json:"author"`
+}
+
 // ValidationError imposes a guarantee on the callee: the error
 // message must be safe to show to the client.
 type ValidationError struct {
@@ -64,57 +75,75 @@ type Service struct {
 func (err *ValidationError) Error() string { return err.SafeMessage }
 
 // UserInputValid always returns a ValidationError
-func (b *Book) UserInputValid() error {
-	if b.Title == "" {
+func (r *CreateRequest) UserInputValid() error {
+	if r.Title == "" {
 		return &ValidationError{"title is empty"}
 	}
-	if len(b.Title) > maxLenTitle {
+	if len(r.Title) > maxLenTitle {
 		return &ValidationError{"title is too long"}
 	}
 
-	if b.Author == "" {
+	if r.Author == "" {
 		return &ValidationError{"author is empty"}
 	}
-	if len(b.Author) > maxLenAuthor {
+	if len(r.Author) > maxLenAuthor {
 		return &ValidationError{"author is too long"}
 	}
 
 	return nil
 }
 
-// UserInputValidForCreate validates b, applying additional rules
-// assuming the input is used to create a new record.
-//
-// It always returns a ValidationError
-func (b *Book) UserInputValidForCreate() error {
-	if err := b.UserInputValid(); err != nil {
-		return err
+// Book returns an error if UserInputValid fails. In this case,
+// the error is guaranteed to be a ValidationError.
+func (r *CreateRequest) Book() (*Book, error) {
+	if err := r.UserInputValid(); err != nil {
+		return nil, err
 	}
 
-	if b.ID != 0 {
-		return &ValidationError{"ID must not be set"}
+	return &Book{
+		Title:  r.Title,
+		Author: r.Author,
+	}, nil
+}
+
+// UserInputValid always returns a ValidationError
+func (r *UpdateRequest) UserInputValid() error {
+	if r.Title == "" {
+		return &ValidationError{"title is empty"}
+	}
+	if len(r.Title) > maxLenTitle {
+		return &ValidationError{"title is too long"}
+	}
+
+	if r.Author == "" {
+		return &ValidationError{"author is empty"}
+	}
+	if len(r.Author) > maxLenAuthor {
+		return &ValidationError{"author is too long"}
+	}
+
+	if r.ID < 0 {
+		return &ValidationError{fmt.Sprintf("negative ID is not allowed: %v", r.ID)}
+	}
+	if r.ID == 0 {
+		return &ValidationError{"ID must be set"}
 	}
 
 	return nil
 }
 
-// UserInputValidForUpdate validates b, applying additional rules
-// assuming the input is used to update an existing record.
-//
-// It always returns a ValidationError
-func (b *Book) UserInputValidForUpdate() error {
-	if err := b.UserInputValid(); err != nil {
-		return err
+// Book returns an error if UserInputValid fails. In this case,
+// the error is guaranteed to be a ValidationError.
+func (r *UpdateRequest) Book() (*Book, error) {
+	if err := r.UserInputValid(); err != nil {
+		return nil, err
 	}
 
-	if b.ID < 0 {
-		return &ValidationError{fmt.Sprintf("negative ID is not allowed: %v", b.ID)}
-	}
-	if b.ID == 0 {
-		return &ValidationError{"ID must be set"}
-	}
-
-	return nil
+	return &Book{
+		ID:     r.ID,
+		Title:  r.Title,
+		Author: r.Author,
+	}, nil
 }
 
 func NewMux(l *log.Logger, s *Service) *Mux {
@@ -138,20 +167,26 @@ func NewService() *Service {
 }
 
 func (m *Mux) Create(w http.ResponseWriter, r *http.Request) {
-	var b Book
-	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+	var cr CreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&cr); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprintf(w, "cannot parse book\n")
 		return
 	}
 
-	if err := b.UserInputValidForCreate(); err != nil {
+	b, err := cr.Book()
+	switch {
+	case errors.As(err, new(*ValidationError)):
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprintf(w, "input is invalid: %v\n", err)
 		return
+	case err != nil:
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, "cannot parse book\n")
+		return
 	}
 
-	newbook, err := withContext(r.Context(), func() (*Book, error) { return m.s.Create(&b) })
+	newbook, err := withContext(r.Context(), func() (*Book, error) { return m.s.Create(b) })
 	switch {
 	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 		return
@@ -213,20 +248,26 @@ func (m *Mux) Read(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Mux) Update(w http.ResponseWriter, r *http.Request) {
-	var b Book
-	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+	var ur UpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&ur); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprintf(w, "cannot parse book\n")
 		return
 	}
 
-	if err := b.UserInputValidForUpdate(); err != nil {
+	b, err := ur.Book()
+	switch {
+	case errors.As(err, new(*ValidationError)):
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprintf(w, "input is invalid: %v\n", err)
 		return
+	case err != nil:
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, "cannot parse book\n")
+		return
 	}
 
-	found, err := withContext(r.Context(), func() (*Book, error) { return m.s.Update(&b) })
+	found, err := withContext(r.Context(), func() (*Book, error) { return m.s.Update(b) })
 	switch {
 	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 		return
