@@ -1,7 +1,5 @@
 // problems, prioritized:
 //
-// . clean structure: decouple finding from read/update/delete
-//
 // . clean structure: decouple repo
 //
 // . observability: use slog
@@ -87,6 +85,16 @@ func (s Storage) NonDeleted() iter.Seq[*Book] {
 			}
 		}
 	}
+}
+
+func (s Storage) ByID(id int) *Book {
+	for b := range s.NonDeleted() {
+		if b.ID == id {
+			return b
+		}
+	}
+
+	return nil
 }
 
 // UserInputValid always returns a ValidationError
@@ -354,43 +362,37 @@ func (s *Service) Read(id int) (*Book, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	for b := range s.storage.NonDeleted() {
-		if b.ID == id {
-			return b, nil
-		}
-	}
-
-	return nil, nil
+	b := s.storage.ByID(id)
+	return b, nil
 }
 
 func (s *Service) Update(r *Book) (*Book, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for b := range s.storage.NonDeleted() {
-		if b.ID == r.ID {
-			b.Title = r.Title
-			b.Author = r.Author
-
-			return b, nil
-		}
+	b := s.storage.ByID(r.ID)
+	if b == nil {
+		return nil, errNotFound
 	}
 
-	return nil, errNotFound
+	b.Title = r.Title
+	b.Author = r.Author
+
+	return b, nil
 }
 
 func (s *Service) Delete(id int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for b := range s.storage.NonDeleted() {
-		if b.ID == id {
-			b.DeletedAt = new(time.Now())
-			return nil
-		}
+	b := s.storage.ByID(id)
+	if b == nil {
+		return errNotFound
 	}
 
-	return errNotFound
+	b.DeletedAt = new(time.Now())
+
+	return nil
 }
 
 func withContext[T any](ctx context.Context, fn func() (T, error)) (T, error) {
