@@ -457,6 +457,7 @@ func run() error {
 
 	listener, err := net.Listen("tcp", ":8090")
 	if err != nil {
+		logger.Error("failed to acquire a listener", "error", err)
 		return fmt.Errorf("run: failed to acquire a listener: %w", err)
 	}
 
@@ -472,10 +473,13 @@ func run() error {
 	go func() {
 		<-sigctx.Done()
 
+		logger.Info("shutdown initiated")
+
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
 		if err := server.Shutdown(ctx); err != nil {
+			logger.Error("failed to shutdown server", "error", err)
 			shutdownerr <- fmt.Errorf("run: failed to shutdown server: %w\n", err)
 		} else {
 			shutdownerr <- nil
@@ -483,6 +487,7 @@ func run() error {
 	}()
 
 	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+		logger.Error("http handler failed", "error", err)
 		return fmt.Errorf("run: http handler failed: %w", err)
 	}
 
@@ -491,6 +496,6 @@ func run() error {
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "main: run failed: %v\n", err)
+		os.Exit(1)
 	}
 }
