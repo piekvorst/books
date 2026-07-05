@@ -65,8 +65,8 @@ type ValidationError struct {
 type Mux struct {
 	*http.ServeMux
 
-	l *log.Logger
-	s *Service
+	logger  *log.Logger
+	service *Service
 }
 
 type Service struct {
@@ -149,8 +149,8 @@ func (r *UpdateRequest) Book() (*Book, error) {
 
 func NewMux(l *log.Logger, s *Service) *Mux {
 	m := &Mux{}
-	m.l = l
-	m.s = s
+	m.logger = l
+	m.service = s
 
 	m.ServeMux = http.NewServeMux()
 	m.ServeMux.HandleFunc("POST /books", m.Create)
@@ -194,14 +194,14 @@ func (m *Mux) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newbook, err := withContext(r.Context(), func() (*Book, error) { return m.s.Create(b) })
+	newbook, err := withContext(r.Context(), func() (*Book, error) { return m.service.Create(b) })
 	switch {
 	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 		return
 	case err != nil:
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "failed to create an entity\n")
-		m.l.Printf("Mux.Create: unexpected error: %v\n", err)
+		m.logger.Printf("Mux.Create: unexpected error: %v\n", err)
 		return
 	}
 
@@ -209,12 +209,12 @@ func (m *Mux) Create(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(&resp).Encode(newbook); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "failed to encode response\n")
-		m.l.Printf("Mux.Create: failed to encode response: %v\n", err)
+		m.logger.Printf("Mux.Create: failed to encode response: %v\n", err)
 		return
 	}
 
 	if written, err := resp.WriteTo(w); err != nil {
-		m.l.Printf("Mux.Create: failed to write to write to client (written %v bytes): %v\n", written, err)
+		m.logger.Printf("Mux.Create: failed to write to write to client (written %v bytes): %v\n", written, err)
 	}
 }
 
@@ -226,14 +226,14 @@ func (m *Mux) Read(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b, err := withContext(r.Context(), func() (*Book, error) { return m.s.Read(id) })
+	b, err := withContext(r.Context(), func() (*Book, error) { return m.service.Read(id) })
 	switch {
 	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 		return
 	case err != nil:
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "failed to found an entity\n")
-		m.l.Printf("Mux.Read: unexpected error: %v\n", err)
+		m.logger.Printf("Mux.Read: unexpected error: %v\n", err)
 		return
 	}
 
@@ -242,12 +242,12 @@ func (m *Mux) Read(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewEncoder(&resp).Encode(b); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			fmt.Fprintf(w, "failed to encode response\n")
-			m.l.Printf("Mux.Read: failed to encode response: %v\n", err)
+			m.logger.Printf("Mux.Read: failed to encode response: %v\n", err)
 			return
 		}
 
 		if written, err := resp.WriteTo(w); err != nil {
-			m.l.Printf("Mux.Read: failed to write to write to client (written %v bytes): %v\n", written, err)
+			m.logger.Printf("Mux.Read: failed to write to write to client (written %v bytes): %v\n", written, err)
 		}
 	} else {
 		w.WriteHeader(http.StatusNotFound)
@@ -275,7 +275,7 @@ func (m *Mux) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	found, err := withContext(r.Context(), func() (*Book, error) { return m.s.Update(b) })
+	found, err := withContext(r.Context(), func() (*Book, error) { return m.service.Update(b) })
 	switch {
 	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 		return
@@ -286,7 +286,7 @@ func (m *Mux) Update(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "failed to update an entity\n")
-		m.l.Printf("Mux.Update: unexpected error: %v\n", err)
+		m.logger.Printf("Mux.Update: unexpected error: %v\n", err)
 		return
 	}
 
@@ -294,12 +294,12 @@ func (m *Mux) Update(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(&resp).Encode(found); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "failed to encode response\n")
-		m.l.Printf("Mux.Update: failed to encode response: %v\n", err)
+		m.logger.Printf("Mux.Update: failed to encode response: %v\n", err)
 		return
 	}
 
 	if written, err := resp.WriteTo(w); err != nil {
-		m.l.Printf("Mux.Update: failed to write to write to client (written %v bytes): %v\n", written, err)
+		m.logger.Printf("Mux.Update: failed to write to write to client (written %v bytes): %v\n", written, err)
 	}
 }
 
@@ -311,7 +311,7 @@ func (m *Mux) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = withContext(r.Context(), func() (struct{}, error) { return struct{}{}, m.s.Delete(id) })
+	_, err = withContext(r.Context(), func() (struct{}, error) { return struct{}{}, m.service.Delete(id) })
 	switch {
 	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 		return
@@ -322,7 +322,7 @@ func (m *Mux) Delete(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "failed to delete an entity\n")
-		m.l.Printf("Mux.Delete: unexpected error: %v\n", err)
+		m.logger.Printf("Mux.Delete: unexpected error: %v\n", err)
 		return
 	}
 
