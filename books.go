@@ -1,7 +1,5 @@
 // problems, prioritized:
 //
-// . modeling: deleted_at instead of nil
-//
 // . clean structure: decouple finding from read/update/delete
 //
 // . clean structure: decouple repo
@@ -17,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"iter"
 	"log"
 	"net"
 	"net/http"
@@ -41,7 +40,11 @@ type Book struct {
 	ID     int    `json:"id"`
 	Title  string `json:"title"`
 	Author string `json:"author"`
+
+	DeletedAt *time.Time `json:"-"`
 }
+
+type Storage []*Book
 
 type CreateRequest struct {
 	Title  string `json:"title"`
@@ -68,11 +71,23 @@ type Mux struct {
 }
 
 type Service struct {
-	storage []*Book
+	storage Storage
 	mu      sync.RWMutex
 }
 
 func (err *ValidationError) Error() string { return err.SafeMessage }
+
+func (s Storage) NonDeleted() iter.Seq[*Book] {
+	return func(yield func(*Book) bool) {
+		for _, b := range s {
+			if b != nil && b.DeletedAt == nil {
+				if !yield(b) {
+					return
+				}
+			}
+		}
+	}
+}
 
 // UserInputValid always returns a ValidationError
 func (r *CreateRequest) UserInputValid() error {
@@ -339,8 +354,8 @@ func (s *Service) Read(id int) (*Book, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	for _, b := range s.storage {
-		if b != nil && b.ID == id {
+	for b := range s.storage.NonDeleted() {
+		if b.ID == id {
 			return b, nil
 		}
 	}
@@ -348,14 +363,16 @@ func (s *Service) Read(id int) (*Book, error) {
 	return nil, nil
 }
 
-func (s *Service) Update(b *Book) (*Book, error) {
+func (s *Service) Update(r *Book) (*Book, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for i := range s.storage {
-		if s.storage[i] != nil && s.storage[i].ID == b.ID {
-			s.storage[i] = b
-			return s.storage[i], nil
+	for b := range s.storage.NonDeleted() {
+		if b.ID == r.ID {
+			b.Title = r.Title
+			b.Author = r.Author
+
+			return b, nil
 		}
 	}
 
@@ -366,9 +383,9 @@ func (s *Service) Delete(id int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for i := range s.storage {
-		if s.storage[i] != nil && s.storage[i].ID == id {
-			s.storage[i] = nil
+	for b := range s.storage.NonDeleted() {
+		if b.ID == id {
+			b.DeletedAt = new(time.Now())
 			return nil
 		}
 	}
