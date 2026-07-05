@@ -1,7 +1,5 @@
 // problems, prioritized:
 //
-// . clean structure: decouple repo
-//
 // . observability: use slog
 //
 // . performance: make searching O(log n) time
@@ -42,7 +40,10 @@ type Book struct {
 	DeletedAt *time.Time `json:"-"`
 }
 
-type Storage []*Book
+type Storage struct {
+	mem []*Book
+	mu  sync.RWMutex
+}
 
 type CreateRequest struct {
 	Title  string `json:"title"`
@@ -69,33 +70,10 @@ type Mux struct {
 }
 
 type Service struct {
-	storage Storage
-	mu      sync.RWMutex
+	storage *Storage
 }
 
 func (err *ValidationError) Error() string { return err.SafeMessage }
-
-func (s Storage) NonDeleted() iter.Seq[*Book] {
-	return func(yield func(*Book) bool) {
-		for _, b := range s {
-			if b != nil && b.DeletedAt == nil {
-				if !yield(b) {
-					return
-				}
-			}
-		}
-	}
-}
-
-func (s Storage) ByID(id int) *Book {
-	for b := range s.NonDeleted() {
-		if b.ID == id {
-			return b
-		}
-	}
-
-	return nil
-}
 
 // UserInputValid always returns a ValidationError
 func (r *CreateRequest) UserInputValid() error {
@@ -183,8 +161,15 @@ func NewMux(l *log.Logger, s *Service) *Mux {
 	return m
 }
 
-func NewService() *Service {
+func NewService(storage *Storage) *Service {
 	s := &Service{}
+	s.storage = storage
+
+	return s
+}
+
+func NewStorage() *Storage {
+	s := &Storage{}
 
 	return s
 }
@@ -346,31 +331,62 @@ func (m *Mux) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) Create(b *Book) (*Book, error) {
+	newbook := s.storage.Create(b)
+	return newbook, nil
+}
+
+func (s *Service) Read(id int) (*Book, error) {
+	b := s.storage.Read(id)
+	return b, nil
+}
+
+func (s *Service) Update(r *Book) (*Book, error) {
+	b, err := s.storage.Update(r)
+	return b, err
+}
+
+func (s *Service) Delete(id int) error {
+	err := s.storage.Delete(id)
+	return err
+}
+
+func (s *Storage) NonDeleted() iter.Seq[*Book] {
+	return func(yield func(*Book) bool) {
+		for _, b := range s.mem {
+			if b != nil && b.DeletedAt == nil {
+				if !yield(b) {
+					return
+				}
+			}
+		}
+	}
+}
+
+func (s *Storage) Create(b *Book) *Book {
 	newbook := new(*b)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	id := len(s.storage) + 1
+	id := len(s.mem) + 1
 	newbook.ID = id
-	s.storage = append(s.storage, newbook)
+	s.mem = append(s.mem, newbook)
 
-	return newbook, nil
+	return newbook
 }
 
-func (s *Service) Read(id int) (*Book, error) {
+func (s *Storage) Read(id int) *Book {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	b := s.storage.ByID(id)
-	return b, nil
+	return s.byID(id)
 }
 
-func (s *Service) Update(r *Book) (*Book, error) {
+func (s *Storage) Update(r *Book) (*Book, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	b := s.storage.ByID(r.ID)
+	b := s.byID(r.ID)
 	if b == nil {
 		return nil, errNotFound
 	}
@@ -381,16 +397,26 @@ func (s *Service) Update(r *Book) (*Book, error) {
 	return b, nil
 }
 
-func (s *Service) Delete(id int) error {
+func (s *Storage) Delete(id int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	b := s.storage.ByID(id)
+	b := s.byID(id)
 	if b == nil {
 		return errNotFound
 	}
 
 	b.DeletedAt = new(time.Now())
+
+	return nil
+}
+
+func (s *Storage) byID(id int) *Book {
+	for b := range s.NonDeleted() {
+		if b.ID == id {
+			return b
+		}
+	}
 
 	return nil
 }
@@ -418,7 +444,9 @@ func withContext[T any](ctx context.Context, fn func() (T, error)) (T, error) {
 func run() error {
 	logger := log.New(os.Stderr, "books: ", 0)
 
-	service := NewService()
+	storage := NewStorage()
+
+	service := NewService(storage)
 
 	mux := NewMux(logger, service)
 
