@@ -1,7 +1,5 @@
 // problems, prioritized:
 //
-// . observability: use slog
-//
 // . performance: make searching O(log n) time
 package main
 
@@ -12,7 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -65,7 +63,7 @@ type ValidationError struct {
 type Mux struct {
 	*http.ServeMux
 
-	logger  *log.Logger
+	logger  *slog.Logger
 	service *Service
 }
 
@@ -147,7 +145,7 @@ func (r *UpdateRequest) Book() (*Book, error) {
 	}, nil
 }
 
-func NewMux(l *log.Logger, s *Service) *Mux {
+func NewMux(l *slog.Logger, s *Service) *Mux {
 	m := &Mux{}
 	m.logger = l
 	m.service = s
@@ -201,7 +199,7 @@ func (m *Mux) Create(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "failed to create an entity\n")
-		m.logger.Printf("Mux.Create: unexpected error: %v\n", err)
+		m.logger.Error("unexpected error", "error", err)
 		return
 	}
 
@@ -209,12 +207,12 @@ func (m *Mux) Create(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(&resp).Encode(newbook); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "failed to encode response\n")
-		m.logger.Printf("Mux.Create: failed to encode response: %v\n", err)
+		m.logger.Error("failed to encode response", "error", err)
 		return
 	}
 
 	if written, err := resp.WriteTo(w); err != nil {
-		m.logger.Printf("Mux.Create: failed to write to write to client (written %v bytes): %v\n", written, err)
+		m.logger.Warn("failed to write to write to client", "written", written, "error", err)
 	}
 }
 
@@ -233,7 +231,7 @@ func (m *Mux) Read(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "failed to found an entity\n")
-		m.logger.Printf("Mux.Read: unexpected error: %v\n", err)
+		m.logger.Error("unexpected error", "error", err)
 		return
 	}
 
@@ -242,12 +240,12 @@ func (m *Mux) Read(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewEncoder(&resp).Encode(b); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			fmt.Fprintf(w, "failed to encode response\n")
-			m.logger.Printf("Mux.Read: failed to encode response: %v\n", err)
+			m.logger.Error("failed to encode response", "error", err)
 			return
 		}
 
 		if written, err := resp.WriteTo(w); err != nil {
-			m.logger.Printf("Mux.Read: failed to write to write to client (written %v bytes): %v\n", written, err)
+			m.logger.Warn("failed to write to write to client", "written", written, "error", err)
 		}
 	} else {
 		w.WriteHeader(http.StatusNotFound)
@@ -286,7 +284,7 @@ func (m *Mux) Update(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "failed to update an entity\n")
-		m.logger.Printf("Mux.Update: unexpected error: %v\n", err)
+		m.logger.Error("unexpected error", "error", err)
 		return
 	}
 
@@ -294,12 +292,12 @@ func (m *Mux) Update(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(&resp).Encode(found); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "failed to encode response\n")
-		m.logger.Printf("Mux.Update: failed to encode response: %v\n", err)
+		m.logger.Error("failed to encode response", "error", err)
 		return
 	}
 
 	if written, err := resp.WriteTo(w); err != nil {
-		m.logger.Printf("Mux.Update: failed to write to write to client (written %v bytes): %v\n", written, err)
+		m.logger.Warn("failed to write to write to client", "written", written, "error", err)
 	}
 }
 
@@ -322,7 +320,7 @@ func (m *Mux) Delete(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "failed to delete an entity\n")
-		m.logger.Printf("Mux.Delete: unexpected error: %v\n", err)
+		m.logger.Error("unexpected error", "error", err)
 		return
 	}
 
@@ -442,7 +440,14 @@ func withContext[T any](ctx context.Context, fn func() (T, error)) (T, error) {
 }
 
 func run() error {
-	logger := log.New(os.Stderr, "books: ", 0)
+	logger := slog.New(
+		slog.NewJSONHandler(
+			os.Stderr,
+			&slog.HandlerOptions{
+				AddSource: true,
+			},
+		),
+	)
 
 	storage := NewStorage()
 
