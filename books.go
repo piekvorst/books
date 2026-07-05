@@ -439,7 +439,7 @@ func withContext[T any](ctx context.Context, fn func() (T, error)) (T, error) {
 	}
 }
 
-func run() error {
+func main() {
 	logger := slog.New(
 		slog.NewJSONHandler(
 			os.Stderr,
@@ -458,7 +458,7 @@ func run() error {
 	listener, err := net.Listen("tcp", ":8090")
 	if err != nil {
 		logger.Error("failed to acquire a listener", "error", err)
-		return fmt.Errorf("run: failed to acquire a listener: %w", err)
+		os.Exit(1)
 	}
 
 	server := &http.Server{
@@ -479,7 +479,6 @@ func run() error {
 		defer cancel()
 
 		if err := server.Shutdown(ctx); err != nil {
-			logger.Error("failed to shutdown server", "error", err)
 			shutdownerr <- fmt.Errorf("run: failed to shutdown server: %w\n", err)
 		} else {
 			shutdownerr <- nil
@@ -488,14 +487,11 @@ func run() error {
 
 	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 		logger.Error("http handler failed", "error", err)
-		return fmt.Errorf("run: http handler failed: %w", err)
+		os.Exit(1)
 	}
 
-	return <-shutdownerr
-}
-
-func main() {
-	if err := run(); err != nil {
+	if err := <-shutdownerr; err != nil {
+		logger.Error("failed to shutdown server", "error", err)
 		os.Exit(1)
 	}
 }
