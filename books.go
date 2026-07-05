@@ -190,7 +190,7 @@ func (m *Mux) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newbook, err := withContext(r.Context(), func() (*Book, error) { return m.service.Create(b) })
+	newbook, err := m.service.Create(r.Context(), b)
 	switch {
 	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 		return
@@ -222,7 +222,7 @@ func (m *Mux) Read(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b, err := withContext(r.Context(), func() (*Book, error) { return m.service.Read(id) })
+	b, err := m.service.Read(r.Context(), id)
 	switch {
 	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 		return
@@ -271,7 +271,7 @@ func (m *Mux) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	found, err := withContext(r.Context(), func() (*Book, error) { return m.service.Update(b) })
+	found, err := m.service.Update(r.Context(), b)
 	switch {
 	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 		return
@@ -307,7 +307,7 @@ func (m *Mux) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = withContext(r.Context(), func() (struct{}, error) { return struct{}{}, m.service.Delete(id) })
+	err = m.service.Delete(r.Context(), id)
 	switch {
 	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 		return
@@ -326,23 +326,20 @@ func (m *Mux) Delete(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "ok\n")
 }
 
-func (s *Service) Create(b *Book) (*Book, error) {
-	newbook := s.storage.Create(b)
-	return newbook, nil
+func (s *Service) Create(ctx context.Context, b *Book) (*Book, error) {
+	return withContext(ctx, func() (*Book, error) { return s.storage.Create(b), nil })
 }
 
-func (s *Service) Read(id int) (*Book, error) {
-	b := s.storage.Read(id)
-	return b, nil
+func (s *Service) Read(ctx context.Context, id int) (*Book, error) {
+	return withContext(ctx, func() (*Book, error) { return s.storage.Read(id), nil })
 }
 
-func (s *Service) Update(r *Book) (*Book, error) {
-	b, err := s.storage.Update(r)
-	return b, err
+func (s *Service) Update(ctx context.Context, r *Book) (*Book, error) {
+	return withContext(ctx, func() (*Book, error) { return s.storage.Update(r) })
 }
 
-func (s *Service) Delete(id int) error {
-	err := s.storage.Delete(id)
+func (s *Service) Delete(ctx context.Context, id int) error {
+	_, err := withContext(ctx, func() (struct{}, error) { return struct{}{}, s.storage.Delete(id) })
 	return err
 }
 
