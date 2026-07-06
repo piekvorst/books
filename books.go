@@ -297,7 +297,7 @@ func (m *Mux) ReadMany(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var resp bytes.Buffer
-	if err := json.NewEncoder(&resp).Encode(books); err != nil {
+	if err := json.NewEncoder(&resp).Encode(map[string]any{"books": books}); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "failed to encode response\n")
 		m.logger.Error("failed to encode response", "error", err)
