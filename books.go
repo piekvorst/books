@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"iter"
 	"log/slog"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"os"
@@ -439,14 +440,19 @@ func (s *Service) Create(ctx context.Context, b *Book) (*Book, error) {
 }
 
 func (s *Service) Read(ctx context.Context, id int) (*Book, error) {
-	return withContext(ctx, func() (*Book, error) { return s.storage.Read(id), nil })
+	return withContext(ctx, func() (*Book, error) { return s.storage.Read(id) })
 }
 
 func (s *Service) ReadMany(ctx context.Context, ids []int) ([]*Book, error) {
-	sem := make(chan struct{}, readManyMaxConcurrentReads)
-	books := make([]*Book, len(ids))
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
+	books := make([]*Book, len(ids))
+	var firsterr error
+
+	sem := make(chan struct{}, readManyMaxConcurrentReads)
 	var wg sync.WaitGroup
+	var once sync.Once
 
 	for i := range ids {
 		wg.Go(func() {
@@ -454,12 +460,24 @@ func (s *Service) ReadMany(ctx context.Context, ids []int) ([]*Book, error) {
 			defer func() { <-sem }()
 
 			// avoid spawning throwaway work
-			if ctx.Err() != nil {
+			select {
+			case <-ctx.Done():
 				return
+			default:
 			}
 
-			b, err := withContext(ctx, func() (*Book, error) { return s.storage.Read(ids[i]), nil })
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			b, err := withContext(ctx, func() (*Book, error) { return s.storage.Read(ids[i]) })
+			if e := maybeError(); e != nil {
+				err = e
+			}
+			switch {
+			case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
+				return
+			case err != nil:
+				once.Do(func() {
+					firsterr = err
+					cancel()
+				})
 				return
 			}
 
@@ -468,6 +486,10 @@ func (s *Service) ReadMany(ctx context.Context, ids []int) ([]*Book, error) {
 	}
 
 	wg.Wait()
+
+	if firsterr != nil {
+		return nil, fmt.Errorf("Service.ReadMany: failed to read from storage: %w", firsterr)
+	}
 
 	return books, nil
 }
@@ -506,11 +528,11 @@ func (s *Storage) Create(b *Book) *Book {
 	return newbook
 }
 
-func (s *Storage) Read(id int) *Book {
+func (s *Storage) Read(id int) (*Book, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.byID(id)
+	return s.byID(id), nil
 }
 
 func (s *Storage) Update(r *Book) (*Book, error) {
@@ -575,6 +597,14 @@ func withContext[T any](ctx context.Context, fn func() (T, error)) (T, error) {
 	case r := <-ch:
 		return r.t, r.err
 	}
+}
+
+func maybeError() error {
+	if rand.Float32() < 0.20 {
+		return fmt.Errorf("randomly simulated failure")
+	}
+
+	return nil
 }
 
 func main() {
