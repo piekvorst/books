@@ -48,6 +48,10 @@ type CreateRequest struct {
 	Author string `json:"author"`
 }
 
+type ReadManyRequest struct {
+	IDs []int `json:"ids"`
+}
+
 type UpdateRequest struct {
 	ID     int    `json:"id"`
 	Title  string `json:"title"`
@@ -161,6 +165,7 @@ func NewMux(rateLimit int, l *slog.Logger, s *Service) *Mux {
 	m.ServeMux = http.NewServeMux()
 
 	m.ServeMux.HandleFunc("POST /books", m.Create)
+	m.ServeMux.HandleFunc("POST /books/search", m.ReadMany)
 	m.ServeMux.HandleFunc("GET /books/{id}", m.Read)
 	m.ServeMux.HandleFunc("PUT /books", m.Update)
 	m.ServeMux.HandleFunc("DELETE /books/{id}", m.Delete)
@@ -272,6 +277,38 @@ func (m *Mux) Read(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (m *Mux) ReadMany(w http.ResponseWriter, r *http.Request) {
+	var rmr ReadManyRequest
+	if err := json.NewDecoder(r.Body).Decode(&rmr); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "cannot parse request\n")
+		return
+	}
+
+	books, err := m.service.ReadMany(r.Context(), rmr.IDs)
+	switch {
+	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
+		return
+	case err != nil:
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, "failed to found an entity\n")
+		m.logger.Error("unexpected error", "error", err)
+		return
+	}
+
+	var resp bytes.Buffer
+	if err := json.NewEncoder(&resp).Encode(books); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, "failed to encode response\n")
+		m.logger.Error("failed to encode response", "error", err)
+		return
+	}
+
+	if written, err := resp.WriteTo(w); err != nil {
+		m.logger.Warn("failed to write to write to client", "written", written, "error", err)
+	}
+}
+
 func (m *Mux) Update(w http.ResponseWriter, r *http.Request) {
 	select {
 	case m.rateLimiter <- struct{}{}:
@@ -372,6 +409,18 @@ func (s *Service) Create(ctx context.Context, b *Book) (*Book, error) {
 
 func (s *Service) Read(ctx context.Context, id int) (*Book, error) {
 	return withContext(ctx, func() (*Book, error) { return s.storage.Read(id), nil })
+}
+
+func (s *Service) ReadMany(ctx context.Context, ids []int) ([]*Book, error) {
+	books := make([]*Book, 0, len(ids))
+
+	for _, id := range ids {
+		if b := s.storage.Read(id); b != nil {
+			books = append(books, b)
+		}
+	}
+
+	return books, nil
 }
 
 func (s *Service) Update(ctx context.Context, r *Book) (*Book, error) {
