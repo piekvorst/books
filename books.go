@@ -453,9 +453,17 @@ func (s *Service) ReadMany(ctx context.Context, ids []int) ([]*Book, error) {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			if b := s.storage.Read(ids[i]); b != nil {
-				books[i] = b
+			// avoid spawning throwaway work
+			if ctx.Err() != nil {
+				return
 			}
+
+			b, err := withContext(ctx, func() (*Book, error) { return s.storage.Read(ids[i]), nil })
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return
+			}
+
+			books[i] = b
 		})
 	}
 
