@@ -19,6 +19,8 @@ import (
 	"time"
 )
 
+const maxConcurrentWrites = 5
+
 const (
 	maxLenTitle  = 255
 	maxLenAuthor = 255
@@ -521,7 +523,7 @@ func main() {
 
 	service := NewService(storage)
 
-	mux := NewMux(5, logger, service)
+	mux := NewMux(maxConcurrentWrites, logger, service)
 
 	listener, err := net.Listen("tcp", ":8090")
 	if err != nil {
