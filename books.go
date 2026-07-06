@@ -61,6 +61,10 @@ type ValidationError struct {
 type Mux struct {
 	*http.ServeMux
 
+	rateLimit     int
+	rateLimiter   chan func()
+	completedJobs chan struct{}
+
 	logger  *slog.Logger
 	service *Service
 }
@@ -143,16 +147,71 @@ func (r *UpdateRequest) Book() (*Book, error) {
 	}, nil
 }
 
-func NewMux(l *slog.Logger, s *Service) *Mux {
+func NewMux(rateLimit int, l *slog.Logger, s *Service) *Mux {
 	m := &Mux{}
+
+	if rateLimit <= 0 {
+		panic(fmt.Sprintf("NewMux: invalid rateLimit: %v", rateLimit))
+	}
+	m.rateLimit = rateLimit
+	m.rateLimiter = make(chan func())
+	m.completedJobs = make(chan struct{})
+
 	m.logger = l
 	m.service = s
 
 	m.ServeMux = http.NewServeMux()
-	m.ServeMux.HandleFunc("POST /books", m.Create)
+
+	m.ServeMux.HandleFunc("POST /books", func(w http.ResponseWriter, r *http.Request) {
+		done := make(chan struct{})
+		select {
+		case m.rateLimiter <- func() {
+			defer func() { done <- struct{}{} }()
+			m.Create(w, r)
+		}:
+			<-done
+		default:
+			w.WriteHeader(http.StatusTooManyRequests)
+			fmt.Fprintf(w, "too many requests\n")
+		}
+	})
 	m.ServeMux.HandleFunc("GET /books/{id}", m.Read)
-	m.ServeMux.HandleFunc("PUT /books", m.Update)
-	m.ServeMux.HandleFunc("DELETE /books/{id}", m.Delete)
+	m.ServeMux.HandleFunc("PUT /books", func(w http.ResponseWriter, r *http.Request) {
+		done := make(chan struct{})
+		select {
+		case m.rateLimiter <- func() {
+			defer func() { done <- struct{}{} }()
+			m.Update(w, r)
+		}:
+			<-done
+		default:
+			w.WriteHeader(http.StatusTooManyRequests)
+			fmt.Fprintf(w, "too many requests\n")
+		}
+	})
+	m.ServeMux.HandleFunc("DELETE /books/{id}", func(w http.ResponseWriter, r *http.Request) {
+		done := make(chan struct{})
+		select {
+		case m.rateLimiter <- func() {
+			defer func() { done <- struct{}{} }()
+			m.Delete(w, r)
+		}:
+			<-done
+		default:
+			w.WriteHeader(http.StatusTooManyRequests)
+			fmt.Fprintf(w, "too many requests\n")
+		}
+	})
+
+	for range m.rateLimit {
+		go func() {
+			for f := range m.rateLimiter {
+				f()
+			}
+
+			m.completedJobs <- struct{}{}
+		}()
+	}
 
 	return m
 }
@@ -168,6 +227,13 @@ func NewStorage() *Storage {
 	s := &Storage{}
 
 	return s
+}
+
+func (m *Mux) Shutdown() {
+	close(m.rateLimiter)
+	for range m.rateLimit {
+		<-m.completedJobs
+	}
 }
 
 func (m *Mux) Create(w http.ResponseWriter, r *http.Request) {
@@ -455,7 +521,7 @@ func main() {
 
 	service := NewService(storage)
 
-	mux := NewMux(logger, service)
+	mux := NewMux(5, logger, service)
 
 	listener, err := net.Listen("tcp", ":8090")
 	if err != nil {
@@ -496,4 +562,6 @@ func main() {
 		logger.Error("failed to shutdown server", "error", err)
 		os.Exit(1)
 	}
+
+	mux.Shutdown()
 }
