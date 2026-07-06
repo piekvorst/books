@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -284,6 +285,9 @@ func (m *Mux) ReadMany(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "cannot parse request\n")
 		return
 	}
+
+	slices.Sort(rmr.IDs)
+	slices.Compact(rmr.IDs)
 
 	books, err := m.service.ReadMany(r.Context(), rmr.IDs)
 	switch {
