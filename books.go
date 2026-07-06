@@ -63,9 +63,7 @@ type ValidationError struct {
 type Mux struct {
 	*http.ServeMux
 
-	rateLimit     int
-	rateLimiter   chan func()
-	completedJobs chan struct{}
+	rateLimiter chan struct{}
 
 	logger  *slog.Logger
 	service *Service
@@ -155,65 +153,17 @@ func NewMux(rateLimit int, l *slog.Logger, s *Service) *Mux {
 	if rateLimit <= 0 {
 		panic(fmt.Sprintf("NewMux: invalid rateLimit: %v", rateLimit))
 	}
-	m.rateLimit = rateLimit
-	m.rateLimiter = make(chan func())
-	m.completedJobs = make(chan struct{})
+	m.rateLimiter = make(chan struct{}, rateLimit)
 
 	m.logger = l
 	m.service = s
 
 	m.ServeMux = http.NewServeMux()
 
-	m.ServeMux.HandleFunc("POST /books", func(w http.ResponseWriter, r *http.Request) {
-		done := make(chan struct{})
-		select {
-		case m.rateLimiter <- func() {
-			defer func() { done <- struct{}{} }()
-			m.Create(w, r)
-		}:
-			<-done
-		default:
-			w.WriteHeader(http.StatusTooManyRequests)
-			fmt.Fprintf(w, "too many requests\n")
-		}
-	})
+	m.ServeMux.HandleFunc("POST /books", m.Create)
 	m.ServeMux.HandleFunc("GET /books/{id}", m.Read)
-	m.ServeMux.HandleFunc("PUT /books", func(w http.ResponseWriter, r *http.Request) {
-		done := make(chan struct{})
-		select {
-		case m.rateLimiter <- func() {
-			defer func() { done <- struct{}{} }()
-			m.Update(w, r)
-		}:
-			<-done
-		default:
-			w.WriteHeader(http.StatusTooManyRequests)
-			fmt.Fprintf(w, "too many requests\n")
-		}
-	})
-	m.ServeMux.HandleFunc("DELETE /books/{id}", func(w http.ResponseWriter, r *http.Request) {
-		done := make(chan struct{})
-		select {
-		case m.rateLimiter <- func() {
-			defer func() { done <- struct{}{} }()
-			m.Delete(w, r)
-		}:
-			<-done
-		default:
-			w.WriteHeader(http.StatusTooManyRequests)
-			fmt.Fprintf(w, "too many requests\n")
-		}
-	})
-
-	for range m.rateLimit {
-		go func() {
-			for f := range m.rateLimiter {
-				f()
-			}
-
-			m.completedJobs <- struct{}{}
-		}()
-	}
+	m.ServeMux.HandleFunc("PUT /books", m.Update)
+	m.ServeMux.HandleFunc("DELETE /books/{id}", m.Delete)
 
 	return m
 }
@@ -231,14 +181,16 @@ func NewStorage() *Storage {
 	return s
 }
 
-func (m *Mux) Shutdown() {
-	close(m.rateLimiter)
-	for range m.rateLimit {
-		<-m.completedJobs
-	}
-}
-
 func (m *Mux) Create(w http.ResponseWriter, r *http.Request) {
+	select {
+	case m.rateLimiter <- struct{}{}:
+		defer func() { <-m.rateLimiter }()
+	default:
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprintf(w, "too many requests\n")
+		return
+	}
+
 	var cr CreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&cr); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -321,6 +273,15 @@ func (m *Mux) Read(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Mux) Update(w http.ResponseWriter, r *http.Request) {
+	select {
+	case m.rateLimiter <- struct{}{}:
+		defer func() { <-m.rateLimiter }()
+	default:
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprintf(w, "too many requests\n")
+		return
+	}
+
 	var ur UpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&ur); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -370,6 +331,15 @@ func (m *Mux) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Mux) Delete(w http.ResponseWriter, r *http.Request) {
+	select {
+	case m.rateLimiter <- struct{}{}:
+		defer func() { <-m.rateLimiter }()
+	default:
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprintf(w, "too many requests\n")
+		return
+	}
+
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -564,6 +534,4 @@ func main() {
 		logger.Error("failed to shutdown server", "error", err)
 		os.Exit(1)
 	}
-
-	mux.Shutdown()
 }
