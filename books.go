@@ -113,6 +113,21 @@ func (r *CreateRequest) Book() (*Book, error) {
 }
 
 // UserInputValid always returns a ValidationError
+func (r *ReadManyRequest) UserInputValid() error {
+	if len(r.IDs) == 0 {
+		return &ValidationError{"empty request"}
+	}
+
+	for _, id := range r.IDs {
+		if id <= 0 {
+			return &ValidationError{fmt.Sprintf("non-positive ID: %v", id)}
+		}
+	}
+
+	return nil
+}
+
+// UserInputValid always returns a ValidationError
 func (r *UpdateRequest) UserInputValid() error {
 	if r.Title == "" {
 		return &ValidationError{"title is empty"}
@@ -283,6 +298,12 @@ func (m *Mux) ReadMany(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&rmr); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprintf(w, "cannot parse request\n")
+		return
+	}
+
+	if err := rmr.UserInputValid(); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "input is invalid: %v\n", err)
 		return
 	}
 
