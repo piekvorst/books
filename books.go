@@ -280,7 +280,7 @@ func (m *Mux) Read(w http.ResponseWriter, r *http.Request) {
 		return
 	case err != nil:
 		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprintf(w, "failed to found an entity\n")
+		fmt.Fprintf(w, "failed to find an entity\n")
 		m.logger.Error("unexpected error", "error", err)
 		return
 	}
@@ -323,7 +323,7 @@ func (m *Mux) ReadMany(w http.ResponseWriter, r *http.Request) {
 		return
 	case err != nil:
 		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprintf(w, "failed to found an entity\n")
+		fmt.Fprintf(w, "failed to find an entity\n")
 		m.logger.Error("unexpected error", "error", err)
 		return
 	}
