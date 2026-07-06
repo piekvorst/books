@@ -20,7 +20,11 @@ import (
 	"time"
 )
 
-const maxConcurrentWrites = 5
+const (
+	maxConcurrentWrites = 5
+
+	readManyMaxConcurrentReads = 3
+)
 
 const (
 	maxLenTitle  = 255
@@ -437,13 +441,36 @@ func (s *Service) Read(ctx context.Context, id int) (*Book, error) {
 }
 
 func (s *Service) ReadMany(ctx context.Context, ids []int) ([]*Book, error) {
-	books := make([]*Book, 0, len(ids))
+	sem := make(chan struct{}, readManyMaxConcurrentReads)
+	chanbooks := make(chan *Book)
+
+	var wg sync.WaitGroup
 
 	for _, id := range ids {
-		if b := s.storage.Read(id); b != nil {
+		wg.Go(func() {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			if b := s.storage.Read(id); b != nil {
+				chanbooks <- b
+			}
+		})
+	}
+
+	jobdone := make(chan struct{}, 1)
+	books := make([]*Book, 0, len(ids))
+
+	go func() {
+		for b := range chanbooks {
 			books = append(books, b)
 		}
-	}
+
+		jobdone <- struct{}{}
+	}()
+
+	wg.Wait()
+	close(chanbooks)
+	<-jobdone
 
 	return books, nil
 }
