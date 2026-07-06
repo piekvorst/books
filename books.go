@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -125,6 +124,12 @@ func (r *ReadManyRequest) UserInputValid() error {
 	for _, id := range r.IDs {
 		if id <= 0 {
 			return &ValidationError{fmt.Sprintf("non-positive ID: %v", id)}
+		}
+	}
+
+	for i := 1; i < len(r.IDs); i++ {
+		if r.IDs[i-1] >= r.IDs[i] {
+			return &ValidationError{"ids are either not sorted or contain duplicates"}
 		}
 	}
 
@@ -311,9 +316,6 @@ func (m *Mux) ReadMany(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slices.Sort(rmr.IDs)
-	slices.Compact(rmr.IDs)
-
 	books, err := m.service.ReadMany(r.Context(), rmr.IDs)
 	switch {
 	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
@@ -442,35 +444,22 @@ func (s *Service) Read(ctx context.Context, id int) (*Book, error) {
 
 func (s *Service) ReadMany(ctx context.Context, ids []int) ([]*Book, error) {
 	sem := make(chan struct{}, readManyMaxConcurrentReads)
-	chanbooks := make(chan *Book)
+	books := make([]*Book, len(ids))
 
 	var wg sync.WaitGroup
 
-	for _, id := range ids {
+	for i := range ids {
 		wg.Go(func() {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			if b := s.storage.Read(id); b != nil {
-				chanbooks <- b
+			if b := s.storage.Read(ids[i]); b != nil {
+				books[i] = b
 			}
 		})
 	}
 
-	jobdone := make(chan struct{}, 1)
-	books := make([]*Book, 0, len(ids))
-
-	go func() {
-		for b := range chanbooks {
-			books = append(books, b)
-		}
-
-		jobdone <- struct{}{}
-	}()
-
 	wg.Wait()
-	close(chanbooks)
-	<-jobdone
 
 	return books, nil
 }
